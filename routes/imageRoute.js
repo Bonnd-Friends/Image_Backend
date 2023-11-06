@@ -16,12 +16,12 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-router.post('/api/images', upload.single('image'), (req, res) => {
+router.post('/api/images/:username', upload.single('image'), (req, res) => {
     if (!req.file) {
       return res.status(400).send('Please upload an image.');
     }
   
-    const username = req.body.username;
+    const username = req.params.username;
     const imageUrl = req.file.filename;
   
     // Check if the user exists and if not present then create one otherwise add to existing 
@@ -63,7 +63,7 @@ const fs = require('fs');
 
 router.delete('/api/images/:username', (req, res) => {
   const username = req.params.username;
-  const imageUrl = req.body.imageUrl; // The image URL to delete
+  const imageUrl = req.body.imageUrl;
 
   Image.findOne({ username })
     .then(user => {
