@@ -1,64 +1,81 @@
 const express = require('express');
 const multer = require('multer');
+const Jimp = require('jimp');
 const path = require('path');
+
 const router = express.Router();
 const { Image } = require('../models/image_urls');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, 'Images/');
+    cb(null, './Images/');
   },
   filename: (req, file, cb) => {
-    const username = req.body.username;
+    const username = req.params.username;
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
     cb(null, username + '-' + uniqueSuffix + path.extname(file.originalname));
   }
 });
 const upload = multer({ storage });
 
-router.post('/api/images/:username', upload.single('image'), (req, res) => {
-    if (!req.file) {
-      return res.status(400).send('Please upload an image.');
-    }
+router.post('/api/images/:username', upload.single('file'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ message: 'Please upload an image.' });
+  }
+
+  const username = req.params.username;
+
+  const imageUrl = req.file.filename;
+  const { x, y, width, height } = JSON.parse(req.body.croppedImage)
   
-    const username = req.params.username;
-    const imageUrl = req.file.filename;
+
+  Jimp.read(`./Images/${imageUrl}`, (err, image) => {
+    if (err) throw err;
   
-    // Check if the user exists and if not present then create one otherwise add to existing 
-    Image.findOne({ username })
-      .then(user => {
-        if (!user) {
-          return Image.create({ username, images: [{imageUrl}] });
-        }
-        user.images.push({imageUrl});
-        return user.save();
-      })
-      .then(updatedImage => {
-        return res.status(201).json(updatedImage);
-      })
-      .catch(err => {
-        console.error(err);
-        return res.status(500).send('Image upload failed.');
-      });
+    image.crop(parseInt(x), parseInt(y), parseInt(width), parseInt(height))
+         .write(`./Images/${imageUrl}`, (err) => {
+           if (err) console.error(err);
+           else console.log('Image cropped successfully');
+         });
   });
 
-    
-router.get('/api/images/:username', (req, res) => {
-    const username = req.params.username;
 
-    Image.findOne({ username })
+
+  // Check if the user exists and if not present then create one otherwise add to existing 
+  Image.findOne({ username })
     .then(user => {
-        if (!user) {
-        return res.status(404).send('User not found');
-        }
-        return res.status(200).json(user.images);
+      if (!user) {
+        return Image.create({ username, images: [{ imageUrl }] });
+      }
+      user.images.push({ imageUrl });
+      return user.save();
+    })
+    .then(updatedImage => {
+      return res.status(201).json(updatedImage);
     })
     .catch(err => {
-        console.error(err);
-        return res.status(500).send('Error fetching images.');
+      console.error(err);
+      return res.status(500).send('Image upload failed.');
     });
 });
-    
+
+
+router.get('/api/images/:username', (req, res) => {
+  const username = req.params.username;
+
+  Image.findOne({ username })
+    .then(user => {
+      if (!user) {
+        return res.status(404).send('User not found');
+      }
+      return res.status(200).json(user.images);
+    })
+    .catch(err => {
+      console.error(err);
+      return res.status(500).send('Error fetching images.');
+    });
+});
+
 const fs = require('fs');
 
 router.delete('/api/images/:username', (req, res) => {
