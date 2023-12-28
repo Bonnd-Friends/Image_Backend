@@ -51,7 +51,7 @@ router.post('/api/images/:username', upload.single('file'), (req, res) => {
       return user.save();
     })
     .then(updatedImage => {
-      return res.status(201).json(updatedImage);
+      return res.status(200).json({imageUrl:imageUrl});
     })
     .catch(err => {
       console.error(err);
@@ -117,6 +117,30 @@ router.delete('/api/images/:username', (req, res) => {
       console.error(err);
       return res.status(500).send('User not found');
     });
+});
+
+router.get('/image/:filename', (req, res) => {
+  const filename = req.params.filename;
+
+  // Validate the filename to prevent path traversal attacks
+  if (/^[a-zA-Z0-9-.]+$/.test(filename)) {
+    // Assuming your images are stored in a directory named 'uploads'
+    const imagePath = path.join(__dirname, '../Images', filename);
+
+    // Check if the file exists
+    if (fs.existsSync(imagePath)) {
+      // Read the image file and send it as a response
+      const imageStream = fs.createReadStream(imagePath);
+      imageStream.pipe(res);
+    } else {
+      // If the file doesn't exist, send a placeholder or default image
+      const placeholderPath = path.join(__dirname, '../Images', 'demo.png');
+      const placeholderStream = fs.createReadStream(placeholderPath);
+      placeholderStream.pipe(res);
+    }
+  } else {
+    res.status(400).send('Invalid filename');
+  }
 });
 
 
