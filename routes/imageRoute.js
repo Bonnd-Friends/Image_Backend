@@ -1,147 +1,141 @@
 const express = require('express');
 const multer = require('multer');
 const Jimp = require('jimp');
-const path = require('path');
-
-const router = express.Router();
+const aws = require('aws-sdk');
 const { Image } = require('../models/image_urls');
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, './Images/');
-  },
-  filename: (req, file, cb) => {
-    const username = req.params.username;
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, username + '-' + uniqueSuffix + path.extname(file.originalname));
-  }
+const router = express.Router();
+// aws configurations
+aws.config.update({
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  region: 'ap-south-1',
 });
+
+const s3 = new aws.S3();
+
+// used multer for memory storage
+const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
-router.post('/api/images/:username', upload.single('file'), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ message: 'Please upload an image.' });
-  }
+router.post('/api/images/:username', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'Please upload an image.' });
+    }
 
-  const username = req.params.username;
+    const username = req.body.username;
+    const randomIdentifier = Date.now() + Math.round(Math.random() * 1E9);
+    const fileExtension = req.file.originalname.split('.').pop();
 
-  const imageUrl = req.file.filename;
-  const { x, y, width, height } = JSON.parse(req.body.croppedImage)
-  
+    const imageUrl = `${randomIdentifier}.${fileExtension}`;
+    const { x, y, width, height } = JSON.parse(req.body.croppedImage);
 
-  Jimp.read(`./Images/${imageUrl}`, (err, image) => {
-    if (err) throw err;
-  
-    image.crop(parseInt(x), parseInt(y), parseInt(width), parseInt(height))
-         .write(`./Images/${imageUrl}`, (err) => {
-           if (err) console.error(err);
-           else console.log('Image cropped successfully');
-         });
-  });
+    const image = await Jimp.read(req.file.buffer);
+    image.crop(parseInt(x), parseInt(y), parseInt(width), parseInt(height));
+    
+    const croppedBuffer = await image.getBufferAsync(Jimp.MIME_PNG);
 
+    const uploadParams = {
+      Bucket: 'bonnd-images', // Bucker Name
+      Key: `Images/${username}/${imageUrl}`,
+      Body: croppedBuffer,
+    };
 
+    await s3.upload(uploadParams).promise();
 
-  // Check if the user exists and if not present then create one otherwise add to existing 
-  Image.findOne({ username })
-    .then(user => {
-      if (!user) {
-        return Image.create({ username, images: [{ imageUrl }] });
-      }
+    const user = await Image.findOne({ username });
+    if (!user) {
+      await Image.create({ username, images: [{ imageUrl }] });
+    } else {
       user.images.push({ imageUrl });
-      return user.save();
-    })
-    .then(updatedImage => {
-      return res.status(200).json({imageUrl:imageUrl});
-    })
-    .catch(err => {
-      console.error(err);
-      return res.status(500).send('Image upload failed.');
-    });
+      await user.save();
+    }
+
+    return res.status(200).json({ imageUrl });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).send('Image upload failed.');
+  }
 });
 
+router.get('/api/images/:username', async (req, res) => {
+  try {
+    const { username } = req.body;
 
-router.get('/api/images/:username', (req, res) => {
-  const username = req.params.username;
+    const user = await Image.findOne({ username });
 
-  Image.findOne({ username })
-    .then(user => {
-      if (!user) {
-        return res.status(404).send('User not found');
-      }
-      return res.status(200).json(user.images);
-    })
-    .catch(err => {
-      console.error(err);
-      return res.status(500).send('Error fetching images.');
+    if (!user) {
+      return res.status(404).send('User not found');
+    }
+
+    const imageUrls = user.images.map(image => {
+      const imageUrl = image.imageUrl;
+      return `https://bonnd-images.s3.ap-south-1.amazonaws.com/Images/${username}/${imageUrl}`;
     });
+
+    return res.status(200).json({ imageUrls });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).send('Error fetching images.');
+  }
 });
 
-const fs = require('fs');
+router.delete('/api/images/:username', async (req, res) => {
+  try {
+    const { username,imageUrl } = req.body;
 
-router.delete('/api/images/:username', (req, res) => {
-  const username = req.params.username;
-  const imageUrl = req.body.imageUrl;
+    const user = await Image.findOne({ username });
 
-  Image.findOne({ username })
-    .then(user => {
-      if (!user) {
-        return res.status(404).send('User not found');
-      }
-      console.log(user.images)
+    if (!user) {
+      return res.status(404).send('User not found');
+    }
 
-      // Find the image object with the specified imageUrl
-      let imageToDelete;
-      for (let i = 0; i < user.images.length; i++) {
-        const image = user.images[i];
-        imageToDelete = image.imageUrl;
-        user.images.remove(image)
-      }
-      console.log(imageToDelete)
+    const imageToDelete = user.images.find(image => image.imageUrl === imageUrl);
 
-      if (!imageToDelete) {
-        return res.status(404).send('Image not found');
-      }
-      user.images = user.images.filter(image => image.imageUrl !== imageUrl);
-      const imagePath = path.join(__dirname, '..', 'Images', imageToDelete);
-      fs.unlink(imagePath, (err) => {
-        if (err) {
-          console.error(err);
-          return res.status(500).send('Image deletion failed.');
-        }
-        user.save()
-        console.log(user.images)
-        return res.status(200).send(`Successfully Deleted ${imageToDelete}`);
-      });
-    })
-    .catch(err => {
-      console.error(err);
-      return res.status(500).send('User not found');
-    });
+    if (!imageToDelete) {
+      return res.status(404).send('Image not found');
+    }
+
+    const deleteParams = {
+      Bucket: 'bonnd-images',
+      Key: `Images/${username}/${imageUrl}`,
+    };
+
+    await s3.deleteObject(deleteParams).promise();
+
+    user.images.pull(imageToDelete);
+
+    await user.save();
+
+    return res.status(200).send(`Successfully Deleted ${imageUrl}`);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).send('Image deletion failed.');
+  }
 });
-
 router.get('/image/:filename', (req, res) => {
   const filename = req.params.filename;
 
-  // Validate the filename to prevent path traversal attacks
   if (/^[a-zA-Z0-9-.]+$/.test(filename)) {
-    // Assuming your images are stored in a directory named 'uploads'
-    const imagePath = path.join(__dirname, '../Images', filename);
+    const imagePath = `Images/${filename}`;
 
-    // Check if the file exists
-    if (fs.existsSync(imagePath)) {
-      // Read the image file and send it as a response
-      const imageStream = fs.createReadStream(imagePath);
-      imageStream.pipe(res);
-    } else {
-      // If the file doesn't exist, send a placeholder or default image
+    const imageStream = s3.getObject({
+      Bucket: 'bonnd-images',
+      Key: imagePath,
+    }).createReadStream();
+
+    imageStream.on('error', (err) => {
+      console.error(err);
       const placeholderPath = path.join(__dirname, '../Images', 'demo.png');
       const placeholderStream = fs.createReadStream(placeholderPath);
       placeholderStream.pipe(res);
-    }
+    });
+
+    imageStream.pipe(res);
   } else {
     res.status(400).send('Invalid filename');
   }
 });
-
 
 module.exports = router;
