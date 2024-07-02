@@ -18,45 +18,36 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-router.post('/api/images/:username', upload.single('file'), (req, res) => {
+router.post('/api/images/:username', upload.single('file'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ message: 'Please upload an image.' });
   }
 
   const username = req.params.username;
-
   const imageUrl = req.file.filename;
-  const { x, y, width, height } = JSON.parse(req.body.croppedImage)
-  
+  const { x, y, width, height } = JSON.parse(req.body.croppedImage);
 
-  Jimp.read(`./Images/${imageUrl}`, (err, image) => {
-    if (err) throw err;
-  
-    image.crop(parseInt(x), parseInt(y), parseInt(width), parseInt(height))
-         .write(`./Images/${imageUrl}`, (err) => {
-           if (err) console.error(err);
-           else console.log('Image cropped successfully');
-         });
-  });
+  try {
+    const image = await Jimp.read(`./Images/${imageUrl}`);
+    await image.crop(parseInt(x), parseInt(y), parseInt(width), parseInt(height))
+               .writeAsync(`./Images/${imageUrl}`);
+    console.log('Image cropped successfully');
 
-
-
-  // Check if the user exists and if not present then create one otherwise add to existing 
-  Image.findOne({ username })
-    .then(user => {
-      if (!user) {
-        return Image.create({ username, images: [{ imageUrl }] });
-      }
+    // Now proceed with the database operation
+    let user = await Image.findOne({ username });
+    console.log(user)
+    if (!user) {
+      user = await Image.create({ username, images: [{ imageUrl }] });
+    } else {
       user.images.push({ imageUrl });
-      return user.save();
-    })
-    .then(updatedImage => {
-      return res.status(200).json({imageUrl:imageUrl});
-    })
-    .catch(err => {
-      console.error(err);
-      return res.status(500).send('Image upload failed.');
-    });
+      await user.save();
+    }
+
+    res.status(200).json({ imageUrl: imageUrl, imageId: user._id});
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Image upload failed.');
+  }
 });
 
 
